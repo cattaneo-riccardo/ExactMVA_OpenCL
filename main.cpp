@@ -132,7 +132,7 @@ void cl_mem_init(uint demands_size, bool useLocal)
     }
 }
 
-void cl_load_prog(bool useLocal)
+void cl_load_prog(uint demands_length, bool useLocal)
 {
     // Create a program from the kernel source
     clProgram = clCreateProgramWithSource(clContext, 1, (const char **)&source_str, (const size_t *)&source_size, &errcode);
@@ -155,15 +155,29 @@ void cl_load_prog(bool useLocal)
     }
     if (useLocal)
     {
-        if (segment==1){
-            clKernel = clCreateKernel(clProgram, FUNCTION_NAME_SINGLE, &errcode);
-            std::cout<<"Called "<<FUNCTION_NAME_SINGLE<<std::endl;
+        clKernel = clCreateKernel(clProgram, FUNCTION_NAME_SINGLE, &errcode);
+        //Computing Max WorkGroup Size
+        errcode = clGetKernelWorkGroupInfo(clKernel, device_id[DEVICE], CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
+        if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
+        segment=ceil(((DATA_TYPE)demands_length)/max_workgroup_size);
+
+        if (segment>1)
+        {
+            errcode = clReleaseKernel(clKernel);
+            if(errcode != CL_SUCCESS) printf("Error in cleanup\n");
+            clKernel = clCreateKernel(clProgram, FUNCTION_NAME_LOCAL, &errcode);
+
+            //Computing Max WorkGroup Size
+            errcode = clGetKernelWorkGroupInfo(clKernel, device_id[DEVICE], CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
+            if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
+            segment=ceil(((DATA_TYPE)demands_length)/max_workgroup_size);
+
+            std::cout<<"Called "<<FUNCTION_NAME_LOCAL<<std::endl;
+
         }
         else{
-            clKernel = clCreateKernel(clProgram, FUNCTION_NAME_LOCAL, &errcode);
-            std::cout<<"Called "<<FUNCTION_NAME_LOCAL<<std::endl;
+            std::cout<<"Called "<<FUNCTION_NAME_SINGLE<<std::endl;
         }
-
     }
     else {
         clKernel = clCreateKernel(clProgram, FUNCTION_NAME_GLOBAL, &errcode);
@@ -190,11 +204,11 @@ void cl_launch_kernel(std::vector<DATA_TYPE> &residences, const std::vector<DATA
     if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
     segment=ceil(((DATA_TYPE)demands_length)/max_workgroup_size);
 
-  //Computing WorkGroupSize and GlobalWorkSize
-  size_t localWorkSize, globalWorkSize;
-  localWorkSize = demands_length/segment;
-  globalWorkSize = demands_length/segment;
-    
+    //Computing WorkGroupSize and GlobalWorkSize
+    size_t localWorkSize, globalWorkSize;
+    localWorkSize = demands_length/segment;
+    globalWorkSize = demands_length/segment;
+
     std::cout<<"Segment size: "<<segment<<std::endl;
     std::cout<<"Work Group Size:  "<<localWorkSize<<std::endl;
     std::cout.flush();
@@ -221,7 +235,7 @@ void cl_launch_kernel(std::vector<DATA_TYPE> &residences, const std::vector<DATA
     errcode |= clSetKernelArg(clKernel, 6, sizeof(DATA_TYPE), &think_time);
 
     clFinish(clCommandQue);
-    
+
   if(errcode != CL_SUCCESS) printf("Error in setting arguments\n");
   errcode = clEnqueueNDRangeKernel(clCommandQue, clKernel, 1, NULL, &globalWorkSize, &localWorkSize, 0, NULL, NULL);
 
@@ -386,7 +400,7 @@ int main(int argc, char *argv[])
     bool useLocal=(required_local_size<=local_memory_size);
 
     cl_mem_init(demands.size(), useLocal);
-    cl_load_prog(useLocal);
+    cl_load_prog(demands.size(), useLocal);
 
     start_time = high_resolution_clock::now();
     cl_launch_kernel(responseGPU, demands, num_stations, num_jobs, think_time, useLocal);
