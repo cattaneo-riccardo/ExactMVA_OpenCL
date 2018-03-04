@@ -396,10 +396,6 @@ int main(int argc, char *argv[])
 
     //Printing Results
     std::cout << "Global Throughput: "<<throughput<<std::endl;
-    /*std::cout << "First 5 Residence Times:"<<std::endl;
-    for (uint k=0; k<5 && k<num_stations; k++)
-        std::cout << responseCPU[k] << " ";
-    std::cout<<std::endl;*/
     float sys_res=0.0;
     for (uint k=0; k<num_stations; k++)
         sys_res+=responseCPU[k];
@@ -424,7 +420,6 @@ int main(int argc, char *argv[])
     cl_clean_up(useLocal);
 
     //Printing Results
-
     time_span = duration_cast<duration<double>>(end_time - start_time);
     std::cout<<"Time required by GPU: "<<time_span.count()<<std::endl<<std::endl;
     sys_res=0.0;
@@ -433,13 +428,22 @@ int main(int argc, char *argv[])
     throughput=num_jobs/(think_time+sys_res);
 
     std::cout << "Global Throughput: "<<throughput<<std::endl;
-    /*std::cout << "First 5 Residence Times:"<<std::endl;
-    for (uint k=0; k<5 && k<num_stations; k++)
-        std::cout << responseGPU[k] << " ";
-    std::cout<<std::endl;*/
     std::cout<<"System Response Time: "<<sys_res<<std::endl<<std::endl;
 
+    //Check equality between CPU and GPU Arrays
     checkArrays(num_stations, &responseCPU[0], &responseGPU[0]);
+
+    //Saving Residence Times on File
+    std::ofstream residence_file;
+    residence_file.open(FILENAME_RESIDENCE);
+    for (uint i=0; i<num_stations; i++)
+    {
+        residence_file<<responseGPU[i]<<",";
+        if ((i+1)%10==0)
+            residence_file<<std::endl;
+    }
+    std::cout<<"Residence Times saved in text file at: '"<<FILENAME_RESIDENCE<<"'"<<std::endl;
+    residence_file.close();
 
     return 0;
 }
