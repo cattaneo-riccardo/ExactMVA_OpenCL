@@ -188,6 +188,25 @@ void cl_load_prog(uint demands_length, bool useLocal)
     clFinish(clCommandQue);
 }
 
+void cl_clean_up(bool useLocal)
+{
+  // Clean up
+    errcode = clReleaseKernel(clKernel);
+    errcode |= clReleaseProgram(clProgram);
+    errcode |= clReleaseMemObject(response_mem_obj);
+    errcode |= clReleaseMemObject(demand_mem_obj);
+    if (!useLocal){
+        errcode |= clReleaseMemObject(num_jobs_obj);
+        errcode |= clReleaseMemObject(partial_sum_obj);
+    }
+
+    errcode |= clReleaseCommandQueue(clCommandQue);
+    errcode |= clReleaseContext(clContext);
+    free(source_str);
+
+    if(errcode != CL_SUCCESS) printf("Error in cleanup\n");
+}
+
 void cl_launch_kernel(std::vector<DATA_TYPE> &residences, const std::vector<DATA_TYPE> &demands, uint num_stations, cl_ulong tot_jobs, DATA_TYPE think_time=0, bool useLocal=false)
 {
     uint demands_length=demands.size();
@@ -243,26 +262,12 @@ void cl_launch_kernel(std::vector<DATA_TYPE> &residences, const std::vector<DATA
   clFinish(clCommandQue);
 
   errcode = clEnqueueReadBuffer(clCommandQue, response_mem_obj, CL_TRUE, 0, sizeof(DATA_TYPE)*num_stations, &residences[0], 0, NULL, NULL);
-  if(errcode != CL_SUCCESS) printf("Error in reading GPU mem, ID: %d\n", errcode);
-}
-
-void cl_clean_up(bool useLocal)
-{
-  // Clean up
-    errcode = clReleaseKernel(clKernel);
-    errcode |= clReleaseProgram(clProgram);
-    errcode |= clReleaseMemObject(response_mem_obj);
-    errcode |= clReleaseMemObject(demand_mem_obj);
-    if (!useLocal){
-        errcode |= clReleaseMemObject(num_jobs_obj);
-        errcode |= clReleaseMemObject(partial_sum_obj);
-    }
-
-    errcode |= clReleaseCommandQueue(clCommandQue);
-    errcode |= clReleaseContext(clContext);
-    free(source_str);
-
-    if(errcode != CL_SUCCESS) printf("Error in cleanup\n");
+  if(errcode != CL_SUCCESS)
+  {
+    printf("Error in reading GPU mem, ID: %d\n", errcode);
+    cl_clean_up(useLocal);
+    exit(-1);
+  }
 }
 
 uint readFromFile(std::ifstream &inputFile, std::vector<DATA_TYPE> &demands)
