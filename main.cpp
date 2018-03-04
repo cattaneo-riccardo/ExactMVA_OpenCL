@@ -291,15 +291,30 @@ void generateRandom(std::vector<DATA_TYPE> &demands, uint num_stations)
     demands.insert(demands.end(), remaining_size, 0);
 }
 
-bool checkArrays(int size, DATA_TYPE arr1[], DATA_TYPE arr2[])
+void checkArrays(int size, DATA_TYPE arr1[], DATA_TYPE arr2[])
 {
+    uint fails=0;
+    DATA_TYPE max_diff=0.0;
     for (uint i=0; i<size; i++)
     {
-	if (fabs(arr1[i]-arr2[i])>ZERO_APPROX)
-		return false;
+        DATA_TYPE diff=fabs(arr1[i]-arr2[i]);
+        if (diff>ZERO_APPROX)
+        {
+            fails++;
+        }
+        if (diff>max_diff)
+            max_diff=diff;
+
     }
-    return true;
+
+    if (fails==0)
+        std::cout<<"Arrays are (almost) Equals."<<std::endl;
+    else
+        std::cout<<"ATTENTION: Residences with difference grater than "<<ZERO_APPROX<<": "<<fails<<std::endl;
+    std::cout<<"Max Difference: "<<max_diff<<std::endl;
+
 }
+
 int main(int argc, char *argv[])
 {
     using namespace std::chrono;
@@ -424,11 +439,7 @@ int main(int argc, char *argv[])
     std::cout<<std::endl;*/
     std::cout<<"System Response Time: "<<sys_res<<std::endl<<std::endl;
 
-    bool equalArr=checkArrays(num_stations, &responseCPU[0], &responseGPU[0]);
-    if (equalArr)
-	std::cout<<"Arrays are Equal"<<std::endl;
-    else
-	std::cout<<"ATTENTION: Arrays are NOT equal! Errors occured"<<std::endl;
+    checkArrays(num_stations, &responseCPU[0], &responseGPU[0]);
 
     return 0;
 }
