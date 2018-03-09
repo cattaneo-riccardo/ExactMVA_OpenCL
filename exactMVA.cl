@@ -111,7 +111,7 @@ __kernel void single_exactMVA(
 
     num_jobs[k]=0; /*Nk*/
 
-    if (k==0)
+    /*if (k==0)
     {
         #if defined(cl_khr_fp64)  // Khronos extension available?
         printf("Using Khronos Double\n");
@@ -120,7 +120,7 @@ __kernel void single_exactMVA(
         #else
         printf("Using single-precision Float\n");
         #endif
-    }
+    }*/
 
     for (ulong jobs=1; jobs<=tot_jobs; jobs++)
     {

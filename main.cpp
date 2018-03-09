@@ -11,11 +11,7 @@
 #include <CL/cl.h>
 #endif
 
-#if defined(cl_khr_fp64)  // Khronos extension available?
-#pragma OPENCL EXTENSION cl_khr_fp64 : enable
-typedef cl_double FLOAT_TYPE;
-#elif defined(cl_amd_fp64)  // AMD extension available?
-#pragma OPENCL EXTENSION cl_amd_fp64 : enable
+#ifdef DOUBLE
 typedef cl_double FLOAT_TYPE;
 #else
 typedef cl_float FLOAT_TYPE;
@@ -30,7 +26,7 @@ typedef cl_float FLOAT_TYPE;
 #define FUNCTION_NAME_LOCAL "local_exactMVA"
 #define FUNCTION_NAME_GLOBAL "global_exactMVA"
 
-#define NUM_STATIONS_DEFAULT 16500
+#define NUM_STATIONS_DEFAULT 512
 #define NUM_JOBS_DEFAULT 6e4
 #define THINK_TIME_DEFAULT 0
 
@@ -47,6 +43,7 @@ cl_device_id device_id[2];
 cl_uint num_devices;
 cl_uint num_platforms;
 cl_int errcode;
+cl_device_fp_config double_support;
 cl_context clContext;
 cl_kernel clKernel;
 cl_command_queue clCommandQue;
@@ -337,7 +334,6 @@ void checkArrays(std::vector<FLOAT_TYPE> &arr1, std::vector<FLOAT_TYPE> &arr2)
 int main(int argc, char *argv[])
 {
     using namespace std::chrono;
-
     std::ifstream inputFile;
 
     std::vector<FLOAT_TYPE> demands;
