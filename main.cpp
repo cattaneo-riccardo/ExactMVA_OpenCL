@@ -10,6 +10,17 @@
 #else
 #include <CL/cl.h>
 #endif
+
+#if defined(cl_khr_fp64)  // Khronos extension available?
+#pragma OPENCL EXTENSION cl_khr_fp64 : enable
+typedef cl_double FLOAT_TYPE;
+#elif defined(cl_amd_fp64)  // AMD extension available?
+#pragma OPENCL EXTENSION cl_amd_fp64 : enable
+typedef cl_double FLOAT_TYPE;
+#else
+typedef cl_float FLOAT_TYPE;
+#endif
+
 #define DEVICE 0
 #define PLATFORM 0
 #define FILENAME_CL "exactMVA.cl"
@@ -25,9 +36,8 @@
 
 #define ZERO_APPROX 1e-3
 #define MAX_SOURCE_SIZE 5120
-typedef float DATA_TYPE;
 
-uint segment=1;
+cl_uint segment=1;
 int max_workgroup_size;
 cl_ulong local_memory_size;
 
@@ -52,24 +62,24 @@ char *source_str;
 size_t source_size;
 //Return iterations that where needed to compute the results*/
 
-DATA_TYPE exactMVA(std::vector<DATA_TYPE> &response, const std::vector<DATA_TYPE> &demand, uint num_stations, uint tot_jobs, DATA_TYPE think_time=0)
+FLOAT_TYPE exactMVA(std::vector<FLOAT_TYPE> &response, const std::vector<FLOAT_TYPE> &demand, cl_uint num_stations, cl_uint tot_jobs, FLOAT_TYPE think_time=0)
 {
-    std::vector<DATA_TYPE> num_jobs(num_stations, 0.0); //Initialize number of jobs in each station to zero
-    DATA_TYPE thr=0.0;
+    std::vector<FLOAT_TYPE> num_jobs(num_stations, 0.0); //Initialize number of jobs in each station to zero
+    FLOAT_TYPE thr=0.0;
 
     //Main cycle of Exact MVA Algorithm
-    for (uint jobs=1; jobs<=tot_jobs; jobs++)
+    for (cl_uint jobs=1; jobs<=tot_jobs; jobs++)
     {
-        DATA_TYPE tot_resp=0.0;;
-        for (uint k=0; k<num_stations; k++)
+        FLOAT_TYPE tot_resp=0.0;;
+        for (cl_uint k=0; k<num_stations; k++)
         {
             response[k]=demand[k]*(1+num_jobs[k]); //Num jobs contains the value of the previous iteration
             tot_resp+=response[k];
         }
 
-        thr=((DATA_TYPE)jobs)/(think_time + tot_resp);
+        thr=((FLOAT_TYPE)jobs)/(think_time + tot_resp);
 
-        for (uint k=0; k<num_stations; k++){
+        for (cl_uint k=0; k<num_stations; k++){
             num_jobs[k]=thr*response[k];
         }
     }
@@ -117,22 +127,22 @@ void cl_initialization()
     if(errcode != CL_SUCCESS) printf("Error in creating command queue\n");
 }
 
-void cl_mem_init(uint demands_size, bool useLocal)
+void cl_mem_init(cl_uint demands_size, bool useLocal)
 {
-    response_mem_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(DATA_TYPE)*demands_size, NULL, &errcode);
+    response_mem_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(FLOAT_TYPE)*demands_size, NULL, &errcode);
     if(errcode != CL_SUCCESS) printf("Error in creating buffers\n");
 
-    demand_mem_obj = clCreateBuffer(clContext, CL_MEM_READ_ONLY, sizeof(DATA_TYPE)*demands_size, NULL, &errcode);
+    demand_mem_obj = clCreateBuffer(clContext, CL_MEM_READ_ONLY, sizeof(FLOAT_TYPE)*demands_size, NULL, &errcode);
     if(errcode != CL_SUCCESS) printf("Error in creating buffers\n");
 
     if (!useLocal){
-        num_jobs_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(DATA_TYPE)*demands_size, NULL, &errcode);
-        partial_sum_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(DATA_TYPE)*(demands_size/segment), NULL, &errcode);
+        num_jobs_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(FLOAT_TYPE)*demands_size, NULL, &errcode);
+        partial_sum_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(FLOAT_TYPE)*(demands_size/segment), NULL, &errcode);
         if(errcode != CL_SUCCESS) printf("Error in creating buffers\n");
     }
 }
 
-void cl_load_prog(uint demands_length, bool useLocal)
+void cl_load_prog(cl_uint demands_length, bool useLocal)
 {
     // Create a program from the kernel source
     clProgram = clCreateProgramWithSource(clContext, 1, (const char **)&source_str, (const size_t *)&source_size, &errcode);
@@ -159,7 +169,7 @@ void cl_load_prog(uint demands_length, bool useLocal)
         //Computing Max WorkGroup Size
         errcode = clGetKernelWorkGroupInfo(clKernel, device_id[DEVICE], CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
         if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
-        segment=ceil(((DATA_TYPE)demands_length)/max_workgroup_size);
+        segment=ceil(((FLOAT_TYPE)demands_length)/max_workgroup_size);
 
         if (segment>1)
         {
@@ -170,7 +180,7 @@ void cl_load_prog(uint demands_length, bool useLocal)
             //Computing Max WorkGroup Size
             errcode = clGetKernelWorkGroupInfo(clKernel, device_id[DEVICE], CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
             if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
-            segment=ceil(((DATA_TYPE)demands_length)/max_workgroup_size);
+            segment=ceil(((FLOAT_TYPE)demands_length)/max_workgroup_size);
 
             std::cout<<"Called "<<FUNCTION_NAME_LOCAL<<std::endl;
 
@@ -207,21 +217,21 @@ void cl_clean_up(bool useLocal)
     if(errcode != CL_SUCCESS) printf("Error in cleanup\n");
 }
 
-void cl_launch_kernel(std::vector<DATA_TYPE> &residences, const std::vector<DATA_TYPE> &demands, uint num_stations, cl_ulong tot_jobs, DATA_TYPE think_time=0, bool useLocal=false)
+void cl_launch_kernel(std::vector<FLOAT_TYPE> &residences, const std::vector<FLOAT_TYPE> &demands, cl_uint num_stations, cl_ulong tot_jobs, FLOAT_TYPE think_time=0, bool useLocal=false)
 {
-    uint demands_length=demands.size();
+    cl_uint demands_length=demands.size();
 
     std::cout<<"Number of stations: "<<num_stations<<std::endl;
     std::cout<<"Demand Length: "<<demands_length<<std::endl;
     std::cout<<"Max Local Memory Size: "<<local_memory_size<<std::endl;
 
-    errcode = clEnqueueWriteBuffer(clCommandQue, demand_mem_obj, CL_FALSE, 0, demands_length*sizeof(DATA_TYPE), &demands[0], 0, NULL, NULL);
+    errcode = clEnqueueWriteBuffer(clCommandQue, demand_mem_obj, CL_FALSE, 0, demands_length*sizeof(FLOAT_TYPE), &demands[0], 0, NULL, NULL);
     if(errcode != CL_SUCCESS)printf("Error in writing buffers\n");
 
     //Computing Max WorkGroup Size
     errcode = clGetKernelWorkGroupInfo(clKernel, device_id[DEVICE], CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
     if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
-    segment=ceil(((DATA_TYPE)demands_length)/max_workgroup_size);
+    segment=ceil(((FLOAT_TYPE)demands_length)/max_workgroup_size);
 
     //Computing WorkGroupSize and GlobalWorkSize
     size_t localWorkSize, globalWorkSize;
@@ -239,8 +249,8 @@ void cl_launch_kernel(std::vector<DATA_TYPE> &residences, const std::vector<DATA
 
     if (useLocal)
     {
-        errcode |= clSetKernelArg(clKernel, 2, sizeof(DATA_TYPE)*demands_length, NULL); //Local memory space
-        errcode |= clSetKernelArg(clKernel, 3, sizeof(DATA_TYPE)*(demands_length/segment), NULL); //Local memory space
+        errcode |= clSetKernelArg(clKernel, 2, sizeof(FLOAT_TYPE)*demands_length, NULL); //Local memory space
+        errcode |= clSetKernelArg(clKernel, 3, sizeof(FLOAT_TYPE)*(demands_length/segment), NULL); //Local memory space
     }
     else
     {
@@ -251,7 +261,7 @@ void cl_launch_kernel(std::vector<DATA_TYPE> &residences, const std::vector<DATA
 
     errcode |= clSetKernelArg(clKernel, 4, sizeof(cl_uint), &segment);
     errcode |= clSetKernelArg(clKernel, 5, sizeof(cl_ulong), &tot_jobs);
-    errcode |= clSetKernelArg(clKernel, 6, sizeof(DATA_TYPE), &think_time);
+    errcode |= clSetKernelArg(clKernel, 6, sizeof(FLOAT_TYPE), &think_time);
 
     clFinish(clCommandQue);
 
@@ -261,7 +271,7 @@ void cl_launch_kernel(std::vector<DATA_TYPE> &residences, const std::vector<DATA
   if(errcode != CL_SUCCESS) printf("Error in launching kernel\n");
   clFinish(clCommandQue);
 
-  errcode = clEnqueueReadBuffer(clCommandQue, response_mem_obj, CL_TRUE, 0, sizeof(DATA_TYPE)*num_stations, &residences[0], 0, NULL, NULL);
+  errcode = clEnqueueReadBuffer(clCommandQue, response_mem_obj, CL_TRUE, 0, sizeof(FLOAT_TYPE)*num_stations, &residences[0], 0, NULL, NULL);
   if(errcode != CL_SUCCESS)
   {
     printf("Error in reading GPU mem, ID: %d\n", errcode);
@@ -270,7 +280,7 @@ void cl_launch_kernel(std::vector<DATA_TYPE> &residences, const std::vector<DATA
   }
 }
 
-uint readFromFile(std::ifstream &inputFile, std::vector<DATA_TYPE> &demands)
+cl_uint readFromFile(std::ifstream &inputFile, std::vector<FLOAT_TYPE> &demands)
 {
     while (inputFile.good())
     {
@@ -285,39 +295,43 @@ uint readFromFile(std::ifstream &inputFile, std::vector<DATA_TYPE> &demands)
     return num_station;
 }
 
-void generateRandom(std::vector<DATA_TYPE> &demands, uint num_stations)
+void generateRandom(std::vector<FLOAT_TYPE> &demands, cl_uint num_stations)
 {
-    const DATA_TYPE MULT_FACTOR=0.8;
+    const FLOAT_TYPE MULT_FACTOR=0.8;
     srand(time(nullptr));
-    for (uint k=0; k<num_stations; k++)
-        demands.push_back(((DATA_TYPE)rand())*MULT_FACTOR/RAND_MAX);
+    for (cl_uint k=0; k<num_stations; k++)
+        demands.push_back(((FLOAT_TYPE)rand())*MULT_FACTOR/RAND_MAX);
 
     int remaining_size= pow(2, ceil(log(demands.size())/log(2)))-demands.size();
     demands.insert(demands.end(), remaining_size, 0);
 }
 
-void checkArrays(int size, DATA_TYPE arr1[], DATA_TYPE arr2[])
+void checkArrays(std::vector<FLOAT_TYPE> &arr1, std::vector<FLOAT_TYPE> &arr2)
 {
-    uint fails=0;
-    DATA_TYPE max_diff=0.0;
-    for (uint i=0; i<size; i++)
+    cl_uint fails=0;
+    FLOAT_TYPE max_diff=0.0;
+    if (arr1.size()==arr2.size())
     {
-        DATA_TYPE diff=fabs(arr1[i]-arr2[i]);
-        if (diff>ZERO_APPROX)
+        for (cl_uint i=0; i<arr1.size(); i++)
         {
-            fails++;
+            FLOAT_TYPE diff=fabs(arr1[i]-arr2[i]);
+            if (diff>ZERO_APPROX)
+            {
+                fails++;
+            }
+            if (diff>max_diff)
+                max_diff=diff;
         }
-        if (diff>max_diff)
-            max_diff=diff;
-
+        if (fails==0)
+            std::cout<<"Arrays are (almost) Equals."<<std::endl;
+        else
+            std::cout<<"ATTENTION: Residences with difference grater than "<<ZERO_APPROX<<": "<<fails<<std::endl;
+        std::cout<<"Max Difference: "<<max_diff<<std::endl;
     }
-
-    if (fails==0)
-        std::cout<<"Arrays are (almost) Equals."<<std::endl;
     else
-        std::cout<<"ATTENTION: Residences with difference grater than "<<ZERO_APPROX<<": "<<fails<<std::endl;
-    std::cout<<"Max Difference: "<<max_diff<<std::endl;
-
+    {
+        std::cout<<"Arrays to be compared have different sizes! "<<std::endl;
+    }
 }
 
 int main(int argc, char *argv[])
@@ -326,10 +340,10 @@ int main(int argc, char *argv[])
 
     std::ifstream inputFile;
 
-    std::vector<DATA_TYPE> demands;
-    uint num_stations=NUM_STATIONS_DEFAULT;
-    DATA_TYPE think_time=THINK_TIME_DEFAULT;
-    cl_ulong num_jobs=NUM_JOBS_DEFAULT;
+    std::vector<FLOAT_TYPE> demands;
+    cl_uint num_stations=NUM_STATIONS_DEFAULT;
+    FLOAT_TYPE think_time=THINK_TIME_DEFAULT;
+    cl_uint num_jobs=NUM_JOBS_DEFAULT;
 
     ////////////////////////////////////////////////////////////////////////////////
     //parsing input arguments
@@ -352,10 +366,10 @@ int main(int argc, char *argv[])
         switch (next_option)
         {
             case 'n':
-                num_jobs=atol(optarg);
+                num_jobs=atoi(optarg);
                 break;
             case 'z':
-                think_time=atof(optarg);
+                think_time=(FLOAT_TYPE)atof(optarg);
                 break;
             case 'k':
                 num_stations=atoi(optarg);
@@ -388,8 +402,8 @@ int main(int argc, char *argv[])
         generateRandom(demands, num_stations);
     }
 
-    DATA_TYPE throughput=0.0;
-    std::vector<DATA_TYPE> responseCPU(num_stations, 0);
+    FLOAT_TYPE throughput=0.0;
+    std::vector<FLOAT_TYPE> responseCPU(num_stations, 0);
 
     ///CPU computation
     high_resolution_clock::time_point start_time = high_resolution_clock::now();
@@ -401,8 +415,8 @@ int main(int argc, char *argv[])
 
     //Printing Results
     std::cout << "Global Throughput: "<<throughput<<std::endl;
-    float sys_res=0.0;
-    for (uint k=0; k<num_stations; k++)
+    FLOAT_TYPE sys_res=0.0;
+    for (cl_uint k=0; k<num_stations; k++)
         sys_res+=responseCPU[k];
     std::cout<<"System Response Time: "<<sys_res<<std::endl;
     std::cout<<"---------------------------------------------"<<std::endl;
@@ -411,8 +425,8 @@ int main(int argc, char *argv[])
     read_cl_file();
     cl_initialization();
 
-    std::vector<DATA_TYPE> responseGPU(num_stations, 0);
-    DATA_TYPE required_local_size=demands.size()*(1+((DATA_TYPE)1)/segment)*sizeof(cl_float);
+    std::vector<FLOAT_TYPE> responseGPU(num_stations, 0);
+    FLOAT_TYPE required_local_size=demands.size()*(1+((FLOAT_TYPE)1)/segment)*sizeof(cl_float);
     bool useLocal=(required_local_size<=local_memory_size);
 
     cl_mem_init(demands.size(), useLocal);
@@ -428,7 +442,7 @@ int main(int argc, char *argv[])
     time_span = duration_cast<duration<double>>(end_time - start_time);
     std::cout<<"Time required by GPU: "<<time_span.count()<<std::endl<<std::endl;
     sys_res=0.0;
-    for (uint k=0; k<num_stations; k++)
+    for (cl_uint k=0; k<num_stations; k++)
         sys_res+=responseGPU[k];
     throughput=num_jobs/(think_time+sys_res);
 
@@ -436,12 +450,12 @@ int main(int argc, char *argv[])
     std::cout<<"System Response Time: "<<sys_res<<std::endl<<std::endl;
 
     //Check equality between CPU and GPU Arrays
-    checkArrays(num_stations, &responseCPU[0], &responseGPU[0]);
+    checkArrays(responseCPU, responseGPU);
 
     //Saving Residence Times on File
     std::ofstream residence_file;
     residence_file.open(FILENAME_RESIDENCE);
-    for (uint i=0; i<num_stations; i++)
+    for (cl_uint i=0; i<num_stations; i++)
     {
         residence_file<<responseGPU[i]<<",";
         if ((i+1)%10==0)

@@ -1,2 +1,2 @@
 all:
-	g++ -std=c++11 main.cpp -o mva -l OpenCL
+	g++ -std=c++11 -w main.cpp -o mva -l OpenCL 
