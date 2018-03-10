@@ -3,7 +3,10 @@ OpenCL implementation of the exact Mean Value Analysis algorithm.
 
 For this first release, the application first computes MVA with a simple c++ algorithm on the CPU. Then uses the OpenCL acceleretad algorith and compare execution times and results.
 
-How to use:
+How to compile:
+Use command "make double" if your OpenCL device supports double precision floating point data and computation. It can be seen with the command line utility "clinfo". If your device do not support double, use the command "make float".
+
+How to use to launch:
 An OpenCL Platform is required to be already installed, OpenCL headers have to be present.
 Compile using Make command
 To run the program, type ./mva followed by one or more of the following options:
