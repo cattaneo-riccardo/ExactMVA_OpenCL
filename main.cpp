@@ -19,6 +19,8 @@ typedef cl_float FLOAT_TYPE;
 
 #define DEVICE 0
 #define PLATFORM 0
+#define MAX_PLATFORMS 2
+
 #define FILENAME_CL "exactMVA.cl"
 #define FILENAME_RESIDENCE "./residences.txt"
 
@@ -33,13 +35,16 @@ typedef cl_float FLOAT_TYPE;
 #define ZERO_APPROX 1e-3
 #define MAX_SOURCE_SIZE 5120
 
+#define VERBOSE
+
 cl_uint segment=1;
+bool useLocalMemory=false;
 int max_workgroup_size;
 cl_ulong local_memory_size;
 
 char str_temp[1024];
-cl_platform_id platform_id[2];
-cl_device_id device_id[2];
+cl_platform_id platform_id[MAX_PLATFORMS];
+cl_device_id device_id;
 cl_uint num_devices;
 cl_uint num_platforms;
 cl_int errcode;
@@ -59,9 +64,10 @@ char *source_str;
 size_t source_size;
 //Return iterations that where needed to compute the results*/
 
-FLOAT_TYPE exactMVA(std::vector<FLOAT_TYPE> &response, const std::vector<FLOAT_TYPE> &demand, cl_uint num_stations, cl_uint tot_jobs, FLOAT_TYPE think_time=0)
+void exactMVA(std::vector<FLOAT_TYPE> &response, const std::vector<FLOAT_TYPE> &demand, cl_uint num_stations, cl_uint tot_jobs, FLOAT_TYPE think_time=0)
 {
-    std::vector<FLOAT_TYPE> num_jobs(num_stations, 0.0); //Initialize number of jobs in each station to zero
+    //Initialize number of jobs in each station to zero
+    std::vector<FLOAT_TYPE> num_jobs(num_stations, 0.0);
     FLOAT_TYPE thr=0.0;
 
     //Main cycle of Exact MVA Algorithm
@@ -70,17 +76,13 @@ FLOAT_TYPE exactMVA(std::vector<FLOAT_TYPE> &response, const std::vector<FLOAT_T
         FLOAT_TYPE tot_resp=0.0;;
         for (cl_uint k=0; k<num_stations; k++)
         {
+            num_jobs[k]=thr*response[k];
             response[k]=demand[k]*(1+num_jobs[k]); //Num jobs contains the value of the previous iteration
             tot_resp+=response[k];
         }
 
         thr=((FLOAT_TYPE)jobs)/(think_time + tot_resp);
-
-        for (cl_uint k=0; k<num_stations; k++){
-            num_jobs[k]=thr*response[k];
-        }
     }
-    return thr;
 }
 
 void read_cl_file()
@@ -97,74 +99,53 @@ void read_cl_file()
   fclose( fp );
 }
 
-void cl_initialization()
+void cl_initialization(cl_uint demands_size)
 {
-    // Get platform and device information
-    errcode = clGetPlatformIDs(0, NULL, &num_platforms);
+    errcode = clGetPlatformIDs(MAX_PLATFORMS, platform_id, NULL);
     if(errcode != CL_SUCCESS) printf("Error getting platform IDs\n");
 
-    errcode = clGetPlatformIDs(num_platforms, platform_id, NULL);
-    if(errcode != CL_SUCCESS) printf("Error getting platform IDs\n");
-
-    errcode = clGetDeviceIDs(platform_id[PLATFORM], CL_DEVICE_TYPE_ALL, 1, device_id, &num_devices);
+    errcode = clGetDeviceIDs(platform_id[PLATFORM], CL_DEVICE_TYPE_ALL, 1, &device_id, NULL);
     if(errcode != CL_SUCCESS) printf("Error getting device IDs\n");
 
-    errcode = clGetDeviceInfo(device_id[DEVICE],CL_DEVICE_NAME, sizeof(str_temp), str_temp,NULL);
+    errcode = clGetDeviceInfo(device_id, CL_DEVICE_NAME, sizeof(str_temp), str_temp,NULL);
+    #ifdef VERBOSE
     if(errcode == CL_SUCCESS) printf("Device used: %s\n",str_temp);
-    else printf("Error getting device name\n");
+    #endif // VERBOSE
+    if (errcode!=CL_SUCCESS) printf("Error getting device name\n");
 
-    errcode= clGetDeviceInfo(device_id[DEVICE], CL_DEVICE_LOCAL_MEM_SIZE, sizeof(cl_ulong), &local_memory_size, 0);
-    if(errcode != CL_SUCCESS) printf("Error in getting Maximum Local Memory Size\n");
     // Create an OpenCL context
-    clContext = clCreateContext( NULL, 1, &device_id[DEVICE], NULL, NULL, &errcode);
+    clContext = clCreateContext( NULL, 1, &device_id, NULL, NULL, &errcode);
     if(errcode != CL_SUCCESS) printf("Error in creating context\n");
 
     //Create a command-queue
-    clCommandQue = clCreateCommandQueue(clContext, device_id[DEVICE], 0, &errcode);
+    clCommandQue = clCreateCommandQueue(clContext, device_id, 0, &errcode);
     if(errcode != CL_SUCCESS) printf("Error in creating command queue\n");
+
+    //Verifying which kernel performs better
+    errcode= clGetDeviceInfo(device_id, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(cl_ulong), &local_memory_size, 0);
+    if(errcode != CL_SUCCESS) printf("Error in getting Maximum Local Memory Size\n");
+
+    //Deciding parameters for kernel choice
+    FLOAT_TYPE required_local_size=demands_size*2*sizeof(FLOAT_TYPE);
+    useLocalMemory=(required_local_size<=local_memory_size);
+
 }
 
-void cl_mem_init(cl_uint demands_size, bool useLocal)
-{
-    response_mem_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(FLOAT_TYPE)*demands_size, NULL, &errcode);
-    if(errcode != CL_SUCCESS) printf("Error in creating buffers\n");
-
-    demand_mem_obj = clCreateBuffer(clContext, CL_MEM_READ_ONLY, sizeof(FLOAT_TYPE)*demands_size, NULL, &errcode);
-    if(errcode != CL_SUCCESS) printf("Error in creating buffers\n");
-
-    if (!useLocal){
-        num_jobs_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(FLOAT_TYPE)*demands_size, NULL, &errcode);
-        partial_sum_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(FLOAT_TYPE)*(demands_size/segment), NULL, &errcode);
-        if(errcode != CL_SUCCESS) printf("Error in creating buffers\n");
-    }
-}
-
-void cl_load_prog(cl_uint demands_length, bool useLocal)
+void cl_load_prog(cl_uint demands_length)
 {
     // Create a program from the kernel source
     clProgram = clCreateProgramWithSource(clContext, 1, (const char **)&source_str, (const size_t *)&source_size, &errcode);
     if(errcode != CL_SUCCESS) printf("Error in creating program\n");
 
     // Build the program
-    errcode = clBuildProgram(clProgram, 1, &device_id[DEVICE], "", NULL, NULL);
-    if (errcode != CL_SUCCESS)
-    {
-        size_t len;
-        char buffer[204800];
-        cl_build_status bldstatus;
-        printf("\nError %d: Failed to build program executable\n",errcode);
-        errcode = clGetProgramBuildInfo(clProgram, device_id[DEVICE], CL_PROGRAM_BUILD_STATUS, sizeof(bldstatus), (void *)&bldstatus, &len);
-        if (errcode != CL_SUCCESS)
-        {
-            printf("Build Status error %d",errcode);
-            exit(1);
-        }
-    }
-    if (useLocal)
+    errcode = clBuildProgram(clProgram, 1, &device_id, "", NULL, NULL);
+    if (errcode != CL_SUCCESS) printf("\nError %d: Failed to build program executable\n",errcode);
+
+    if (useLocalMemory)
     {
         clKernel = clCreateKernel(clProgram, FUNCTION_NAME_SINGLE, &errcode);
         //Computing Max WorkGroup Size
-        errcode = clGetKernelWorkGroupInfo(clKernel, device_id[DEVICE], CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
+        errcode = clGetKernelWorkGroupInfo(clKernel, device_id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
         if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
         segment=ceil(((FLOAT_TYPE)demands_length)/max_workgroup_size);
 
@@ -175,34 +156,53 @@ void cl_load_prog(cl_uint demands_length, bool useLocal)
             clKernel = clCreateKernel(clProgram, FUNCTION_NAME_LOCAL, &errcode);
 
             //Computing Max WorkGroup Size
-            errcode = clGetKernelWorkGroupInfo(clKernel, device_id[DEVICE], CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
+            errcode = clGetKernelWorkGroupInfo(clKernel, device_id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
             if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
             segment=ceil(((FLOAT_TYPE)demands_length)/max_workgroup_size);
-
-            std::cout<<"Called "<<FUNCTION_NAME_LOCAL<<std::endl;
-
-        }
-        else{
-            std::cout<<"Called "<<FUNCTION_NAME_SINGLE<<std::endl;
         }
     }
     else {
         clKernel = clCreateKernel(clProgram, FUNCTION_NAME_GLOBAL, &errcode);
-        std::cout<<"Called "<<FUNCTION_NAME_GLOBAL<<std::endl;
-    }
 
+        errcode = clGetKernelWorkGroupInfo(clKernel, device_id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
+        if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
+        segment=ceil(((FLOAT_TYPE)demands_length)/max_workgroup_size);
+    }
     if(errcode != CL_SUCCESS) printf("Error in creating kernel\n");
-    clFinish(clCommandQue);
+
+    #ifdef VERBOSE
+    if (segment>1 && useLocalMemory)
+        std::cout<<"Called "<<FUNCTION_NAME_LOCAL<<std::endl;
+    else if (segment>1)
+        std::cout<<"Called "<<FUNCTION_NAME_GLOBAL<<std::endl;
+    else
+        std::cout<<"Called "<<FUNCTION_NAME_SINGLE<<std::endl;
+    #endif // VERBOSE
 }
 
-void cl_clean_up(bool useLocal)
+void cl_mem_init(cl_uint demands_size)
+{
+    response_mem_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(FLOAT_TYPE)*demands_size, NULL, &errcode);
+    if(errcode != CL_SUCCESS) printf("Error in creating buffers\n");
+
+    demand_mem_obj = clCreateBuffer(clContext, CL_MEM_READ_ONLY, sizeof(FLOAT_TYPE)*demands_size, NULL, &errcode);
+    if(errcode != CL_SUCCESS) printf("Error in creating buffers\n");
+
+    if (!useLocalMemory){
+        num_jobs_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(FLOAT_TYPE)*demands_size, NULL, &errcode);
+        partial_sum_obj = clCreateBuffer(clContext, CL_MEM_READ_WRITE, sizeof(FLOAT_TYPE)*(demands_size/segment), NULL, &errcode);
+        if(errcode != CL_SUCCESS) printf("Error in creating buffers\n");
+    }
+}
+
+void cl_clean_up()
 {
   // Clean up
     errcode = clReleaseKernel(clKernel);
     errcode |= clReleaseProgram(clProgram);
     errcode |= clReleaseMemObject(response_mem_obj);
     errcode |= clReleaseMemObject(demand_mem_obj);
-    if (!useLocal){
+    if (!useLocalMemory){
         errcode |= clReleaseMemObject(num_jobs_obj);
         errcode |= clReleaseMemObject(partial_sum_obj);
     }
@@ -210,41 +210,33 @@ void cl_clean_up(bool useLocal)
     errcode |= clReleaseCommandQueue(clCommandQue);
     errcode |= clReleaseContext(clContext);
     free(source_str);
-
     if(errcode != CL_SUCCESS) printf("Error in cleanup\n");
 }
 
-void cl_launch_kernel(std::vector<FLOAT_TYPE> &residences, const std::vector<FLOAT_TYPE> &demands, cl_uint num_stations, cl_ulong tot_jobs, FLOAT_TYPE think_time=0, bool useLocal=false)
+void cl_launch_kernel(std::vector<FLOAT_TYPE> &residences, const std::vector<FLOAT_TYPE> &demands, cl_uint num_stations, cl_uint tot_jobs, FLOAT_TYPE think_time=0)
 {
     cl_uint demands_length=demands.size();
-
-    std::cout<<"Number of stations: "<<num_stations<<std::endl;
-    std::cout<<"Demand Length: "<<demands_length<<std::endl;
-    std::cout<<"Max Local Memory Size: "<<local_memory_size<<std::endl;
-
-    errcode = clEnqueueWriteBuffer(clCommandQue, demand_mem_obj, CL_FALSE, 0, demands_length*sizeof(FLOAT_TYPE), &demands[0], 0, NULL, NULL);
-    if(errcode != CL_SUCCESS)printf("Error in writing buffers\n");
-
-    //Computing Max WorkGroup Size
-    errcode = clGetKernelWorkGroupInfo(clKernel, device_id[DEVICE], CL_KERNEL_WORK_GROUP_SIZE, sizeof(size_t), &max_workgroup_size, NULL);
-    if(errcode != CL_SUCCESS) printf("Error getting MAX_WORK_GROUP_SIZE\n");
-    segment=ceil(((FLOAT_TYPE)demands_length)/max_workgroup_size);
-
     //Computing WorkGroupSize and GlobalWorkSize
     size_t localWorkSize, globalWorkSize;
     localWorkSize = demands_length/segment;
     globalWorkSize = demands_length/segment;
 
+    #ifdef VERBOSE
+    std::cout<<"Number of stations: "<<num_stations<<std::endl;
+    std::cout<<"Demand Length: "<<demands_length<<std::endl;
     std::cout<<"Segment size: "<<segment<<std::endl;
     std::cout<<"Work Group Size:  "<<localWorkSize<<std::endl;
     std::cout.flush();
+    #endif // VERBOSE
 
+    //Writing Demands to device
+    errcode = clEnqueueWriteBuffer(clCommandQue, demand_mem_obj, CL_FALSE, 0, demands_length*sizeof(FLOAT_TYPE), &demands[0], 0, NULL, NULL);
+    if(errcode != CL_SUCCESS)printf("Error in writing buffers\n");
 
     // Set the arguments of the kernel
     errcode =  clSetKernelArg(clKernel, 0, sizeof(cl_mem), (void *)&response_mem_obj);
     errcode |= clSetKernelArg(clKernel, 1, sizeof(cl_mem), (void *)&demand_mem_obj);
-
-    if (useLocal)
+    if (useLocalMemory)
     {
         errcode |= clSetKernelArg(clKernel, 2, sizeof(FLOAT_TYPE)*demands_length, NULL); //Local memory space
         errcode |= clSetKernelArg(clKernel, 3, sizeof(FLOAT_TYPE)*(demands_length/segment), NULL); //Local memory space
@@ -254,27 +246,20 @@ void cl_launch_kernel(std::vector<FLOAT_TYPE> &residences, const std::vector<FLO
         errcode |= clSetKernelArg(clKernel, 2, sizeof(cl_mem), (void *)&num_jobs_obj);
         errcode |= clSetKernelArg(clKernel, 3, sizeof(cl_mem), (void *)&partial_sum_obj);
     }
-
-
     errcode |= clSetKernelArg(clKernel, 4, sizeof(cl_uint), &segment);
-    errcode |= clSetKernelArg(clKernel, 5, sizeof(cl_ulong), &tot_jobs);
+    errcode |= clSetKernelArg(clKernel, 5, sizeof(cl_uint), &tot_jobs);
     errcode |= clSetKernelArg(clKernel, 6, sizeof(FLOAT_TYPE), &think_time);
-
-    clFinish(clCommandQue);
-
-  if(errcode != CL_SUCCESS) printf("Error in setting arguments\n");
-  errcode = clEnqueueNDRangeKernel(clCommandQue, clKernel, 1, NULL, &globalWorkSize, &localWorkSize, 0, NULL, NULL);
-
-  if(errcode != CL_SUCCESS) printf("Error in launching kernel\n");
-  clFinish(clCommandQue);
-
-  errcode = clEnqueueReadBuffer(clCommandQue, response_mem_obj, CL_TRUE, 0, sizeof(FLOAT_TYPE)*num_stations, &residences[0], 0, NULL, NULL);
-  if(errcode != CL_SUCCESS)
-  {
-    printf("Error in reading GPU mem, ID: %d\n", errcode);
-    cl_clean_up(useLocal);
-    exit(-1);
-  }
+    //Launching kernel execution
+    if(errcode != CL_SUCCESS) printf("Error in setting arguments: %d\n", errcode);
+    errcode = clEnqueueNDRangeKernel(clCommandQue, clKernel, 1, NULL, &globalWorkSize, &localWorkSize, 0, NULL, NULL);
+    //Reading back results
+    errcode |= clEnqueueReadBuffer(clCommandQue, response_mem_obj, CL_TRUE, 0, sizeof(FLOAT_TYPE)*num_stations, &residences[0], 0, NULL, NULL);
+    if(errcode != CL_SUCCESS)
+    {
+        printf("Error in reading GPU mem, ID: %d\n", errcode);
+        cl_clean_up();
+        exit(-1);
+    }
 }
 
 cl_uint readFromFile(std::ifstream &inputFile, std::vector<FLOAT_TYPE> &demands)
@@ -320,9 +305,9 @@ void checkArrays(std::vector<FLOAT_TYPE> &arr1, std::vector<FLOAT_TYPE> &arr2)
                 max_diff=diff;
         }
         if (fails==0)
-            std::cout<<"Arrays are (almost) Equals."<<std::endl;
+            std::cout<<"Arrays are (almost) equal."<<std::endl;
         else
-            std::cout<<"ATTENTION: Residences with difference grater than "<<ZERO_APPROX<<": "<<fails<<std::endl;
+            std::cout<<"ATTENTION: Residences with difference bigger than "<<ZERO_APPROX<<": "<<fails<<std::endl;
         std::cout<<"Max Difference: "<<max_diff<<std::endl;
     }
     else
@@ -392,66 +377,67 @@ int main(int argc, char *argv[])
         }
         next_option = getopt_long(argc, argv, short_options, long_options, NULL);
     }
-
-
+    //Generating random stations, if necessary
     if(demands.size()==0){
         generateRandom(demands, num_stations);
     }
 
-    FLOAT_TYPE throughput=0.0;
+    FLOAT_TYPE throughput=0.0, sys_res=0.0;
     std::vector<FLOAT_TYPE> responseCPU(num_stations, 0);
-
     ///CPU computation
     high_resolution_clock::time_point start_time = high_resolution_clock::now();
-    throughput=exactMVA(responseCPU, demands, num_stations, num_jobs, think_time);
+    exactMVA(responseCPU, demands, num_stations, num_jobs, think_time);
     high_resolution_clock::time_point end_time = high_resolution_clock::now();
     duration<double> time_span = duration_cast<duration<double>>(end_time - start_time);
-
     std::cout<<"Time required by CPU: "<<time_span.count()<<std::endl<<std::endl;
 
     //Printing Results
-    std::cout << "Global Throughput: "<<throughput<<std::endl;
-    FLOAT_TYPE sys_res=0.0;
     for (cl_uint k=0; k<num_stations; k++)
         sys_res+=responseCPU[k];
+    throughput=num_jobs/(think_time+sys_res);
+    std::cout << "Global Throughput: "<<throughput<<std::endl;
     std::cout<<"System Response Time: "<<sys_res<<std::endl;
     std::cout<<"---------------------------------------------"<<std::endl;
 
-    ///OpenCL computation
-    read_cl_file();
-    cl_initialization();
-
     std::vector<FLOAT_TYPE> responseGPU(num_stations, 0);
-    FLOAT_TYPE required_local_size=demands.size()*(1+((FLOAT_TYPE)1)/segment)*sizeof(cl_float);
-    bool useLocal=(required_local_size<=local_memory_size);
-
-    cl_mem_init(demands.size(), useLocal);
-    cl_load_prog(demands.size(), useLocal);
-
+    ///OpenCL computation
     start_time = high_resolution_clock::now();
-    cl_launch_kernel(responseGPU, demands, num_stations, num_jobs, think_time, useLocal);
+    //Initializing OpenCL implementation
+    read_cl_file();
+    cl_initialization(demands.size());
+    cl_load_prog(demands.size());
+    cl_mem_init(demands.size());
+    //Launching Execution
+    cl_launch_kernel(responseGPU, demands, num_stations, num_jobs, think_time);
     end_time = high_resolution_clock::now();
-
-    cl_clean_up(useLocal);
+    time_span = duration_cast<duration<double>>(end_time - start_time);
+    //Cleaning Up memory Objects
+    cl_clean_up();
+    std::cout<<"Time required by GPU: "<<time_span.count()<<std::endl<<std::endl;
 
     //Printing Results
-    time_span = duration_cast<duration<double>>(end_time - start_time);
-    std::cout<<"Time required by GPU: "<<time_span.count()<<std::endl<<std::endl;
     sys_res=0.0;
     for (cl_uint k=0; k<num_stations; k++)
         sys_res+=responseGPU[k];
     throughput=num_jobs/(think_time+sys_res);
-
     std::cout << "Global Throughput: "<<throughput<<std::endl;
     std::cout<<"System Response Time: "<<sys_res<<std::endl<<std::endl;
 
-    //Check equality between CPU and GPU Arrays
+    ///Check equality between CPU and GPU Arrays
     checkArrays(responseCPU, responseGPU);
 
-    //Saving Residence Times on File
+    ///Saving Residence Times on File
     std::ofstream residence_file;
     residence_file.open(FILENAME_RESIDENCE);
-    for (cl_uint i=0; i<num_stations; i++)
+    for (uint i=0; i<num_stations; i++)
+    {
+        residence_file<<responseCPU[i]<<",";
+        if ((i+1)%10==0)
+            residence_file<<std::endl;
+    }
+
+    residence_file<<std::endl<<std::endl;
+    for (uint i=0; i<num_stations; i++)
     {
         residence_file<<responseGPU[i]<<",";
         if ((i+1)%10==0)
